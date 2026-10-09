@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice helper | KC ChatGPT PLUS</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body class="recharge-page subscription-page">
+    <div class="page-shell">
+        <header class="site-hero compact-hero">
+            <a href="/" class="back-home-link"><i data-lucide="arrow-left"></i> Back to home</a>
+            <h1>Invoice helper</h1>
+            <p class="hero-subtitle">Paste a session to check the current subscription, then open OpenAI’s official billing page to download invoices.</p>
+        </header>
+
+        <main class="recharge-card subscription-card">
+            <div class="notice-banner">
+                <i data-lucide="receipt"></i>
+                <p>Invoices come from OpenAI’s official billing system. This tool only looks up the subscription and shows where to download them. It does not issue invoices.</p>
+            </div>
+
+            <section class="subscription-query-section">
+                <label class="field-label" for="sessionInput">Paste the full session JSON</label>
+                <div class="textarea-wrapper">
+                    <a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener"
+                        class="get-token-btn-floating">Get session</a>
+                    <textarea id="sessionInput"
+                        placeholder="Open the link above, select all, and paste the full JSON here (keep user, expires, accessToken, and every other field)"
+                        rows="5"></textarea>
+                </div>
+                <p class="field-hint subscription-field-hint">The session is used only for this lookup and is not saved. After the lookup, open the official billing page below.</p>
+                <div class="subscription-query-actions">
+                    <button type="button" id="checkBtn" class="btn-primary btn-lg">
+                        <span class="btn-text">Check subscription</span>
+                        <div class="loader"></div>
+                    </button>
+                </div>
+            </section>
+
+            <div id="statusMessage" class="status-message"></div>
+
+            <section id="resultSection" class="subscription-result" style="display: none;">
+                <div class="subscription-result-head">
+                    <h2>Subscription</h2>
+                    <span id="activeBadge" class="flow-badge"></span>
+                </div>
+                <div id="resultCard" class="query-result-card"></div>
+                <div class="subscription-actions subscription-billing-actions">
+                    <a id="billingLink" href="https://chatgpt.com/account/manage" target="_blank" rel="noopener"
+                        class="btn-primary btn-lg action-link-btn">
+                        <i data-lucide="external-link"></i>
+                        Open OpenAI billing
+                    </a>
+                </div>
+            </section>
+
+            <details class="subscription-guide-panel">
+                <summary>How to download an invoice</summary>
+                <section class="guide-steps">
+                    <div class="guide-step">
+                        <span class="guide-step-num">1</span>
+                        <div>
+                            <h3>Sign in to ChatGPT</h3>
+                            <p>Sign in at <a href="https://chatgpt.com" target="_blank"
+                                    rel="noopener">chatgpt.com</a> with the Plus or Pro account.</p>
+                        </div>
+                    </div>
+                    <div class="guide-step">
+                        <span class="guide-step-num">2</span>
+                        <div>
+                            <h3>Open subscription and billing</h3>
+                            <p>Click your avatar at the bottom left, then <strong>Settings</strong> → <strong>Account</strong> →
+                                <strong>Manage</strong>.</p>
+                        </div>
+                    </div>
+                    <div class="guide-step">
+                        <span class="guide-step-num">3</span>
+                        <div>
+                            <h3>Open payment history</h3>
+                            <p>On the Stripe billing page, find the charge and click <strong>View invoice</strong> or <strong>Download invoice</strong> to save the PDF.</p>
+                        </div>
+                    </div>
+                    <div class="guide-step">
+                        <span class="guide-step-num">4</span>
+                        <div>
+                            <h3>Update billing details (optional)</h3>
+                            <p>To add a company name or tax ID, update <strong>Billing details</strong>. Later invoices use the new details.</p>
+                        </div>
+                    </div>
+                </section>
+            </details>
+        </main>
+
+        <details class="faq-panel" open>
+            <summary>FAQ</summary>
+            <ul>
+                <li><strong>Lookup failed?</strong> Confirm the session is from a signed-in ChatGPT account and the access token has not expired.</li>
+                <li><strong>Which currency is the invoice in?</strong> It matches the currency Stripe actually charged. Some accounts do not return a currency field.</li>
+                <li><strong>How soon can I download it?</strong> The charge usually appears on the billing page within a few minutes after payment.</li>
+                <li><strong>Can’t find the invoice?</strong> Make sure you are signed in to the paid account, and check whether the subscription is on a team or business workspace or through the App Store.</li>
+            </ul>
+        </details>
+    </div>
+
+    <script>
+        const sessionInput = document.getElementById('sessionInput');
+        const checkBtn = document.getElementById('checkBtn');
+        const statusMessage = document.getElementById('statusMessage');
+        const resultSection = document.getElementById('resultSection');
+        const resultCard = document.getElementById('resultCard');
+        const activeBadge = document.getElementById('activeBadge');
+        const billingLink = document.getElementById('billingLink');
+
+        function setLoading(loading) {
+            const text = checkBtn.querySelector('.btn-text');
+            const loader = checkBtn.querySelector('.loader');
+            checkBtn.disabled = loading;
+            checkBtn.classList.toggle('is-loading', loading);
+            if (text) {
+                text.style.display = loading ? 'none' : '';
+            }
+            if (loader) {
+                loader.style.display = loading ? 'block' : 'none';
+            }
+        }
+
+        function decodeJwtPart(part) {
+            const normalized = String(part || '').replace(/-/g, '+').replace(/_/g, '/');
+            const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+            return JSON.parse(atob(padded));
+        }
+
+        function parseSessionJsonInput(content) {
+            const trimmed = String(content || '').trim().replace(/^\uFEFF/, '');
+            if (!trimmed.startsWith('{')) {
+                return null;
+            }
+            try {
+                const data = JSON.parse(trimmed);
+                if (data?.accessToken || data?.access_token || data?.user) {
+                    return data;
+                }
+            } catch (_) {
+                return null;
+            }
+            return null;
+        }
+
+        function validateSessionInput(rawValue) {
+            const content = String(rawValue || '').trim().replace(/^\uFEFF/, '');
+            if (!content) {
+                return { valid: false, message: 'Paste the full session JSON', session: '' };
+            }
+
+            const session = parseSessionJsonInput(content);
+            if (!session) {
+                return {
+                    valid: false,
+                    message: 'Paste the full session JSON copied from chatgpt.com/api/auth/session',
+                    session: ''
+                };
+            }
+
+            const token = String(session.accessToken || session.access_token || '').trim();
+            if (!token) {
+                return { valid: false, message: 'The session JSON is missing accessToken', session: content };
+            }
+
+            const parts = token.split('.');
+            if (parts.length !== 3) {
+                return { valid: false, message: 'The access token format is invalid', session: content };
+            }
+
+            try {
+                const payload = decodeJwtPart(parts[1]);
+                const exp = Number(payload.exp || 0);
+                const now = Math.floor(Date.now() / 1000);
+                if (exp && exp <= now) {
+                    return { valid: false, message: 'The access token has expired. Get a new session.', session: content };
+                }
+            } catch (_) {
+                return { valid: false, message: 'The access token could not be parsed', session: content };
+            }
+
+            return { valid: true, session: content };
+        }
+
+        async function readJsonResponse(response) {
+            const text = await response.text();
+            if (!text) {
+                return { ok: false, message: `The server returned an empty response (${response.status})` };
+            }
+            try {
+                return { ok: true, data: JSON.parse(text) };
+            } catch (_) {
+                const snippet = text.replace(/\s+/g, ' ').slice(0, 120);
+                if (response.status === 404) {
+                    return { ok: false, message: 'Endpoint not found (404). Restart the service and update to the latest version.' };
+                }
+                return {
+                    ok: false,
+                    message: `Unexpected server response (${response.status})${snippet ? `: ${snippet}` : ''}`
+                };
+            }
+        }
+
+        function localize(value) {
+            const raw = String(value ?? '');
+            if (!raw || !/[\u4e00-\u9fff]/.test(raw)) return raw;
+            const exact = {
+                '是': 'Yes',
+                '否': 'No',
+                '免费版': 'Free',
+                '未知': 'Unknown',
+                '未购买': 'Not purchased',
+                '今天到期': 'Expires today',
+                '请粘贴 Session JSON 或 AccessToken': 'Paste session JSON or an access token',
+                '查询订阅失败': 'Could not check the subscription',
+                '缺少 AccessToken': 'An access token is required',
+                '该 Token 不合法：格式错误': 'This token is invalid: bad format',
+                '该 Token 不合法：无法解析': 'This token is invalid: could not parse it',
+                '该 Token 不合法：签发方错误': 'This token is invalid: wrong issuer',
+                '该 Token 已过期，请重新获取 Session': 'This token has expired. Get a new session.',
+                '无法解析 account_id，请确认 Session 完整有效': 'Could not read the account id. Paste a complete, valid session.',
+                'Session 无效或已过期，请重新获取 Session': 'The session is invalid or expired. Get a new one.',
+                'OpenAI 风控拦截（Cloudflare），请稍后重试或在后台配置住宅代理 PROXY': 'OpenAI blocked the request (Cloudflare). Try again later.',
+                'OpenAI 拒绝访问（403），请确认 Session 来自 chatgpt.com 且 accessToken 未过期': 'OpenAI denied access (403). Use a session from chatgpt.com with an unexpired access token.',
+                'OpenAI 返回数据格式异常': 'OpenAI returned data in an unexpected format',
+                '查询失败': 'Lookup failed'
+            };
+            if (exact[raw]) return exact[raw];
+            let out = raw
+                .replace(/^已过期 (\d+) 天$/, 'Expired $1 days ago')
+                .replace(/^(\d+) 天$/, '$1 days')
+                .replace(/无法连接 OpenAI 订阅接口：/, 'Could not reach the OpenAI subscription API: ')
+                .replace(/OpenAI 返回异常/, 'Unexpected OpenAI response');
+            const keys = Object.keys(exact).sort((a, b) => b.length - a.length);
+            for (const key of keys) {
+                if (key.length >= 2 && out.includes(key)) out = out.split(key).join(exact[key]);
+            }
+            return out;
+        }
+
+        function showStatus(message, type = 'info') {
+            statusMessage.textContent = localize(message);
+            if (!message) {
+                statusMessage.style.display = 'none';
+                return;
+            }
+            const className = type === 'success'
+                ? 'status-success'
+                : (type === 'error' ? 'status-error' : 'status-success');
+            statusMessage.className = `status-message ${className}`;
+            statusMessage.style.display = 'block';
+        }
+
+        function renderRow(label, value, valueClass = '') {
+            const strongClass = valueClass ? ` class="${valueClass}"` : '';
+            return `<div class="query-row"><span>${label}</span><strong${strongClass}>${value}</strong></div>`;
+        }
+
+        function renderResult(data) {
+            const activeClass = data.hasActiveSubscription ? 'success' : 'pending';
+            activeBadge.textContent = data.hasActiveSubscription ? 'Active' : 'Not subscribed / expired';
+            activeBadge.className = `flow-badge ${activeClass}`;
+
+            const rows = [
+                ['Account', data.email || '—'],
+                ['Account ID', data.accountId || '—'],
+                ['Plan', localize(data.plan || '—')],
+                ['Channel', localize(data.subscriptionChannel || '—')],
+                ['Currency', data.currency || '—'],
+                ['Expires', data.expiresAtDisplay || '—'],
+                ['Days left', localize(data.remainingDaysDisplay || '—')],
+                ['Auto-renew', localize(data.autoRenew || '—')],
+                ['Paid before', localize(data.hasPreviouslyPaid || '—')],
+                ['Checked at', data.queriedAtDisplay || '—']
+            ];
+
+            resultCard.innerHTML = rows.map(([label, value]) => renderRow(label, value)).join('');
+            billingLink.href = data.billingPageUrl || 'https://chatgpt.com/account/manage';
+            resultSection.style.display = 'block';
+            lucide.createIcons();
+        }
+
+        async function checkSubscription() {
+            const sessionCheck = validateSessionInput(sessionInput.value);
+            if (!sessionCheck.valid) {
+                showStatus(sessionCheck.message, 'error');
+                return;
+            }
+
+            setLoading(true);
+            showStatus('Checking subscription…', 'info');
+            resultSection.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/public/subscription/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session: sessionCheck.session,
+                        timezone_offset_min: -new Date().getTimezoneOffset()
+                    })
+                });
+                const parsed = await readJsonResponse(response);
+                if (!parsed.ok) {
+                    throw new Error(parsed.message);
+                }
+                const payload = parsed.data;
+                if (!response.ok || !payload.success) {
+                    throw new Error(localize(payload.message) || 'Lookup failed');
+                }
+                showStatus('', 'info');
+                renderResult(payload.data);
+            } catch (error) {
+                showStatus(error.message || 'Lookup failed. Try again in a moment.', 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        checkBtn.addEventListener('click', checkSubscription);
+        lucide.createIcons();
+    </script>
+</body>
+
+</html>
